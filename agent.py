@@ -1,17 +1,34 @@
 # --- Clothing Product Analysis ---
 
-import requests
+from urllib.parse import urlparse
+
 from bs4 import BeautifulSoup
+
+from recommender import rank_by_similarity
+from scraper import fetch_page
+from stores import domain_to_store
+
+
+def _source_from_url(url):
+    """Map a product URL to a known store name."""
+    try:
+        netloc = urlparse(url).netloc
+    except Exception:
+        netloc = ""
+    return domain_to_store(netloc)
 
 
 def analyze_product_url(url):
     """
-    Analyze a clothing product URL, extract details, find similar items, and list sales.
-    Always returns keys: 'similar_products', 'error' (if any), and 'product_info'.
+    Analyze a clothing product URL, extract details, find similar items, and
+    rank them by semantic similarity to the source product.
+
+    Always returns keys: 'similar_products', 'error' (if any), and
+    'product_info'.
     """
     try:
-        # Get the page content
-        response = requests.get(url)
+        # Get the page content (via ScraperAPI when SCRAPER_API_KEY is set)
+        response = fetch_page(url)
         if response.status_code != 200:
             return {
                 "error": "Failed to fetch product page",
@@ -87,6 +104,16 @@ def analyze_product_url(url):
                 "similar_products": [],
                 "product_info": {},
             }
+
+        # Tag each similar product with its source store
+        for item in similar_products:
+            item.setdefault("source", _source_from_url(item.get("url", "")))
+
+        # Rank similar products by semantic similarity to the source product
+        if similar_products:
+            similar_products = rank_by_similarity(
+                product_info.get("name", ""), similar_products, text_key="name"
+            )
 
         return {
             "product_info": product_info,

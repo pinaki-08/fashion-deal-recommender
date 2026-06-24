@@ -5,6 +5,8 @@ from flask_cors import CORS
 from tinydb import TinyDB
 
 from agent import analyze_product_url
+from recommender import rank_by_similarity
+from stores import STORES, store_count
 
 app = Flask(__name__)
 CORS(app)
@@ -14,6 +16,26 @@ db = TinyDB("products.json")  # Store product search history
 @app.route("/")
 def index():
     return "Fashion Deal Recommender Backend is running."
+
+
+@app.route("/stores", methods=["GET"])
+def get_stores():
+    """Return the catalog of supported online stores."""
+    return jsonify({"count": store_count(), "stores": list(STORES.values())})
+
+
+@app.route("/semantic-search", methods=["POST"])
+def semantic_search():
+    """Rank candidate products by semantic similarity to a text query."""
+    data = request.json or {}
+    query = data.get("query")
+    candidates = data.get("candidates", [])
+    if not query:
+        return jsonify({"error": "No query provided"}), 400
+
+    top_k = data.get("top_k")
+    ranked = rank_by_similarity(query, candidates, text_key="name", top_k=top_k)
+    return jsonify({"query": query, "results": ranked})
 
 
 @app.route("/recent-searches", methods=["GET"])

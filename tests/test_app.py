@@ -91,3 +91,33 @@ def test_clear_history(client):
         assert response.status_code == 200
         assert json.loads(response.data)["message"] == "Search history cleared"
         mock_db.truncate.assert_called_once()
+
+
+def test_stores_route(client):
+    """Test the stores catalog route returns 50+ stores."""
+    response = client.get("/stores")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["count"] >= 50
+    assert len(data["stores"]) == data["count"]
+
+
+def test_semantic_search_route(client):
+    """Test semantic search ranks candidates and requires a query."""
+    payload = {
+        "query": "running shoes",
+        "candidates": [
+            {"name": "leather wallet"},
+            {"name": "mens running shoes"},
+        ],
+    }
+    response = client.post("/semantic-search", json=payload)
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["results"][0]["name"] == "mens running shoes"
+
+
+def test_semantic_search_no_query(client):
+    response = client.post("/semantic-search", json={"candidates": []})
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"] == "No query provided"

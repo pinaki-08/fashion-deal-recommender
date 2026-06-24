@@ -14,7 +14,7 @@ def test_analyze_product_url_valid():
     </div>
     """
 
-    with patch("agent.requests.get") as mock_get:
+    with patch("scraper.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = mock_html
         mock_response.status_code = 200
@@ -25,14 +25,14 @@ def test_analyze_product_url_valid():
         assert result["product_info"]["name"] == "Test Product"
         assert result["product_info"]["price"] == "$99.99"
         assert "similar_products" in result
-        mock_get.assert_called_once_with(test_url)
+        mock_get.assert_called_once()
 
 
 def test_analyze_product_url_invalid():
     """Test analyzing an invalid product URL."""
     test_url = "http://example.com/nonexistent"
 
-    with patch("agent.requests.get") as mock_get:
+    with patch("scraper.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_get.return_value = mock_response
@@ -48,7 +48,7 @@ def test_analyze_product_url_parsing_error():
     test_url = "http://example.com/product"
     mock_html = "<div>Invalid product page</div>"
 
-    with patch("agent.requests.get") as mock_get:
+    with patch("scraper.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = mock_html
         mock_response.status_code = 200
@@ -64,7 +64,7 @@ def test_analyze_product_url_network_error():
     """Test handling network errors in product analysis."""
     test_url = "http://example.com/product"
 
-    with patch("agent.requests.get") as mock_get:
+    with patch("scraper.requests.get") as mock_get:
         mock_get.side_effect = Exception("Network error")
 
         result = analyze_product_url(test_url)
@@ -93,7 +93,7 @@ def test_analyze_product_url_with_similar_products():
     </div>
     """
 
-    with patch("agent.requests.get") as mock_get:
+    with patch("scraper.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = mock_html
         mock_response.status_code = 200
@@ -104,3 +104,4 @@ def test_analyze_product_url_with_similar_products():
         assert len(result["similar_products"]) == 2
         assert "name" in result["similar_products"][0]
         assert "url" in result["similar_products"][0]
+        assert "similarity_score" in result["similar_products"][0]

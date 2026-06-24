@@ -1,0 +1,5 @@
+# Optional ML dependencies for real semantic similarity.
+# The app works without these (it falls back to a deterministic
+# bag-of-words cosine), but installing them enables transformer-based
+# sentence embeddings.
+sentence-transformers>=2.2.0

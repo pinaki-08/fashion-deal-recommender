@@ -5,8 +5,8 @@ A smart shopping assistant that helps users find the best deals on fashion items
 ## Features
 
 - Product URL analysis and information extraction
-- Automated web scraping for fashion products
-- Similar item recommendations
+- Automated web scraping for fashion products (ScraperAPI-backed)
+- Semantic similarity recommendations across 50+ online stores
 - Price comparisons and deal finding
 - Clean and intuitive mobile interface
 
@@ -16,11 +16,35 @@ A smart shopping assistant that helps users find the best deals on fashion items
 - Python + Flask for the REST API
 - BeautifulSoup4 for web scraping
 - ScraperAPI integration for reliable data collection
+- sentence-transformers for semantic similarity (with offline fallback)
+
+### ML / Recommendations
+- Semantic ranking of candidate products via sentence embeddings
+  (`all-MiniLM-L6-v2`), with a deterministic bag-of-words cosine fallback
+  so the service runs anywhere, even without the ML extras installed.
+- Catalog of 50+ supported retailers (see `stores.py`).
 
 ### Frontend
 - React Native/Expo mobile app
 - Modern UI components
 - Cross-platform compatibility
+
+### CI/CD & Deployment
+- GitHub Actions pipeline (`.github/workflows/ci.yml`): lint, test, then
+  build and push the Docker image on merge to `main`.
+- Kubernetes manifests under `k8s/` for deployment to AWS EKS.
+
+## API Endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/` | GET | Health check |
+| `/analyze-product` | POST | Analyze a product URL, return semantically ranked similar items |
+| `/semantic-search` | POST | Rank candidate products by semantic similarity to a query |
+| `/stores` | GET | List supported online stores (50+) |
+| `/recent-searches` | GET | Last 10 searches |
+| `/save-search` | POST | Persist a search |
+| `/clear-history` | POST | Clear search history |
 
 ## Getting Started
 
@@ -48,6 +72,11 @@ make install
 2. Configure ScraperAPI:
 ```bash
 export SCRAPER_API_KEY='your_key_here'
+```
+
+   To enable transformer-based semantic similarity (optional):
+```bash
+pip install -r requirements-ml.txt
 ```
 
 3. Start the backend server:
