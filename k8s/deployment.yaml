@@ -17,6 +17,7 @@ spec:
       containers:
       - name: fashion-deal-recommender
         image: fashion-deal-recommender:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
         env:

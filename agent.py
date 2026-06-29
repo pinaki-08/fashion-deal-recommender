@@ -1,12 +1,13 @@
 # --- Clothing Product Analysis ---
 
+import os
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
 from recommender import rank_by_similarity
 from scraper import fetch_page
-from stores import domain_to_store
+from stores import domain_to_store, gather_candidates
 
 
 def _source_from_url(url):
@@ -108,6 +109,18 @@ def analyze_product_url(url):
         # Tag each similar product with its source store
         for item in similar_products:
             item.setdefault("source", _source_from_url(item.get("url", "")))
+
+        # Optionally fan out across all supported stores to widen the candidate
+        # pool. Disabled by default (network heavy); enable with
+        # FANOUT_SEARCH=1. Failures per store are ignored, so this only ever
+        # adds candidates.
+        if os.environ.get("FANOUT_SEARCH") == "1" and product_info.get("name"):
+            try:
+                similar_products.extend(
+                    gather_candidates(product_info["name"], fetch_page)
+                )
+            except Exception:
+                pass
 
         # Rank similar products by semantic similarity to the source product
         if similar_products:
