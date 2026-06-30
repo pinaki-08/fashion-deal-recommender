@@ -97,6 +97,7 @@ def search_store(store, query, fetcher, timeout=30):
         for card in soup.select(".product-card, .product, li.product-item"):
             link = card.find("a", href=True)
             price = card.find(class_="price")
+            original = card.find("del") or card.find("s")
             if not link:
                 continue
             name = link.text.strip()
@@ -107,6 +108,7 @@ def search_store(store, query, fetcher, timeout=30):
                     "name": name,
                     "url": link["href"],
                     "price": price.text.strip() if price else "N/A",
+                    "original_price": original.text.strip() if original else None,
                     "source": store["name"],
                 }
             )

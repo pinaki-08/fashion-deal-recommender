@@ -5,9 +5,32 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from recommender import rank_by_similarity
+from recommender import detect_discount, rank_by_deal
 from scraper import fetch_page
 from stores import domain_to_store, gather_candidates
+
+# CSS classes/tags commonly used for the original (struck-through) price.
+_ORIGINAL_PRICE_CLASSES = (
+    "original-price",
+    "list-price",
+    "old-price",
+    "was-price",
+    "strike",
+    "mrp",
+)
+
+
+def _original_price_text(elem):
+    """Return the struck-through / original price text within an element."""
+    if elem is None:
+        return None
+    original = elem.find("del") or elem.find("s")
+    if original is None:
+        for cls in _ORIGINAL_PRICE_CLASSES:
+            original = elem.find(class_=cls)
+            if original is not None:
+                break
+    return original.text.strip() if original else None
 
 
 def _source_from_url(url):
@@ -73,6 +96,7 @@ def analyze_product_url(url):
             ):
                 product_link = product_div.find("a")
                 product_price = product_div.find("span", class_="price")
+                original_price = _original_price_text(product_div)
 
                 if product_link:
                     similar_products.append(
@@ -82,6 +106,7 @@ def analyze_product_url(url):
                             "price": (
                                 product_price.text.strip() if product_price else "N/A"
                             ),
+                            "original_price": original_price,
                         }
                     )
 
@@ -122,16 +147,31 @@ def analyze_product_url(url):
             except Exception:
                 pass
 
-        # Rank similar products by semantic similarity to the source product
+        # Rank similar products as deals: blend semantic similarity with how
+        # much cheaper each candidate is than the source product's price.
         if similar_products:
-            similar_products = rank_by_similarity(
-                product_info.get("name", ""), similar_products, text_key="name"
+            similar_products = rank_by_deal(
+                product_info.get("name", ""),
+                similar_products,
+                source_price=product_info.get("price"),
+                text_key="name",
             )
+
+        # Detect current discounts (sale vs. original price) on each candidate
+        # and surface the on-sale ones as deals, best discount first.
+        for item in similar_products:
+            discount = detect_discount(item.get("price"), item.get("original_price"))
+            item["on_sale"] = discount["on_sale"]
+            item["discount"] = discount["discount"]
+            item["discount_pct"] = discount["discount_pct"]
+
+        upcoming_sales = [item for item in similar_products if item.get("on_sale")]
+        upcoming_sales.sort(key=lambda x: x.get("discount_pct") or 0, reverse=True)
 
         return {
             "product_info": product_info,
             "similar_products": similar_products,
-            "upcoming_sales": [],
+            "upcoming_sales": upcoming_sales,
         }
 
     except Exception as e:
