@@ -1,98 +1,82 @@
 # Fashion Deal Recommender
 
-A smart shopping assistant that helps users find the best deals on fashion items. This application allows users to input product URLs and finds similar items at better prices through web scraping technology.
+A mobile shopping assistant that finds fashion deals matched to a user's taste. Kubernetes CronJobs scrape products from 50+ stores through ScraperAPI; a pipeline normalizes and deduplicates them into Postgres and vectorizes every product into pgvector. The recommendation service builds a per-user taste vector, runs approximate nearest-neighbor search over the catalog, and re-ranks by deal quality and freshness. The backend is a set of Flask services on AWS EKS; the client is a React Native (Expo) app.
 
 ## Features
 
-- Product URL analysis and information extraction
-- Automated web scraping for fashion products (ScraperAPI-backed)
-- Semantic similarity recommendations across 50+ online stores
-- Price comparisons and deal finding
-- Clean and intuitive mobile interface
+- **Deal aggregation** — prices from 50+ fashion stores, refreshed daily (hot items more often).
+- **Deal detection** — price drops versus an item's own history, plus cross-store price gaps for the same product.
+- **Personalized feed** — deals ranked by semantic similarity to a user's taste, learned from clicks, saves, and purchases.
+- **Search & wishlist** — browse the catalog, wishlist items, and get a push notification when a wishlisted item drops in price.
+- **Semantic matching** — sentence-embedding similarity (`all-MiniLM-L6-v2`) with a deterministic bag-of-words fallback.
 
-## Tech Stack
+## Tech stack
 
-### Backend
-- Python + Flask for the REST API
-- BeautifulSoup4 for web scraping
-- ScraperAPI integration for reliable data collection
-- sentence-transformers for semantic similarity (with offline fallback)
-
-### ML / Recommendations
-- Semantic ranking of candidate products via sentence embeddings
-  (`all-MiniLM-L6-v2`), with a deterministic bag-of-words cosine fallback
-  so the service runs anywhere, even without the ML extras installed.
-- Catalog of 50+ supported retailers (see `stores.py`).
-
-### Frontend
-- React Native/Expo mobile app
-- Modern UI components
-- Cross-platform compatibility
-
-### CI/CD & Deployment
-- GitHub Actions pipelines under `.github/workflows/` for linting, testing, and
-  building the Docker image.
-- Kubernetes manifests under `k8s/` for containerized deployment.
+| Layer | Stack |
+|---|---|
+| Mobile | React Native (Expo) · React Query · push notifications · OTA updates |
+| API | Python · Flask · Gunicorn · JWT auth |
+| Recommender | sentence-transformers (`all-MiniLM-L6-v2`) · pgvector (HNSW) · BoW fallback |
+| Ingestion | ScraperAPI · BeautifulSoup · SQS · S3 |
+| Data | PostgreSQL + pgvector · Redis |
+| Infra | Docker · AWS EKS · GitHub Actions → ECR → Helm |
 
 ## Architecture
 
+Two planes share a datastore but scale, fail, and deploy independently.
+
+- **Serving plane (latency-sensitive):** React Native app → ALB → API gateway → {auth, catalog, recommendation, alerts} Flask services → Postgres/pgvector + Redis.
+- **Ingestion plane (throughput-oriented):** Kubernetes CronJobs → ScraperAPI → raw payloads to S3 + SQS → normalizer / entity-resolution workers → Postgres → change events → embedding worker (pgvector) and alerts evaluator (push notifications).
+
 ```mermaid
 flowchart LR
-    subgraph CLIENT["Client Tier"]
+    subgraph CLIENT["Client"]
         U["React Native / Expo App"]
     end
 
-    subgraph EDGE["Edge"]
-        LB["Load Balancer / Ingress<br/>(k8s Service)"]
+    subgraph SERVING["Serving plane (latency-sensitive)"]
+        GW["API Gateway / BFF<br/>auth · rate limit"]
+        REC["Recommendation service<br/>taste vector · ANN · ranking"]
+        CAT["Catalog service<br/>products · prices · search"]
+        ALR["Alerts service<br/>price-drop push"]
     end
 
-    subgraph APP["Application Tier — Flask API (app.py)"]
-        API["REST Endpoints<br/>/analyze-product · /semantic-search<br/>/stores · /recent-searches"]
-        AG["Agent (agent.py)<br/>fetch → parse → tag → rank"]
-        REC["Recommender (recommender.py)<br/>sentence-transformers + BoW fallback"]
-        ST["Stores Catalog (stores.py)<br/>50+ retailers"]
+    subgraph INGEST["Ingestion plane (throughput-oriented)"]
+        CRON["K8s CronJobs<br/>per-store scrape configs"]
+        Q["Queue (SQS)"]
+        NORM["Normalizer / entity resolution"]
+        EMB["Embedding worker"]
     end
 
-    subgraph DATA["Data Tier"]
-        DB[("TinyDB<br/>products.json<br/>search history")]
+    subgraph DATA["Data"]
+        PG[("PostgreSQL + pgvector")]
+        RD[("Redis cache")]
+        S3[("S3 raw payloads")]
     end
 
-    subgraph EXT["External Services"]
+    subgraph EXT["External"]
         SAPI["ScraperAPI"]
-        WEB["Retailer Sites<br/>Zara · H&M · Amazon …"]
+        WEB["Retailer sites"]
     end
 
-    U -- "1 POST product URL" --> LB
-    LB --> API
-    API -- "2 analyze" --> AG
-    AG -- "3 fetch via" --> SAPI
-    SAPI -- "scrapes" --> WEB
-    AG -- "4 candidates" --> ST
-    AG -- "5 rank" --> REC
-    API -- "6 persist / read history" --> DB
-    API -- "7 ranked deals JSON" --> LB --> U
-
-    classDef ext fill:#fde,stroke:#c39;
-    classDef data fill:#def,stroke:#39c;
-    class SAPI,WEB ext;
-    class DB data;
+    U --> GW --> REC & CAT
+    REC --> PG & RD
+    CAT --> PG & RD
+    CRON --> SAPI --> WEB
+    CRON --> Q --> NORM --> PG
+    NORM --> S3
+    NORM -- "product_changed" --> EMB --> PG
+    NORM -- "price_changed" --> ALR --> U
 ```
 
-**Flow:** the mobile client sends a product URL to the Flask API. The **Agent**
-(`agent.py`) orchestrates the pipeline — scrape the source page through **ScraperAPI**,
-build a candidate set from the 50+ store catalog (`stores.py`), and rank alternatives by
-semantic similarity via the **Recommender** (`recommender.py`). Search history is
-persisted to **TinyDB** (`products.json`) and the ranked deals are returned to the client
-as JSON.
+**Flow:** a CronJob scrapes a store through ScraperAPI, drops raw HTML to S3 and a message to SQS. A normalizer maps store fields to the canonical schema, resolves the product against existing listings, and upserts the product plus a price point; `product_created` / `price_changed` events trigger the embedding worker (vectorize into pgvector) and the alerts service (notify matching wishlists). On the serving side, the recommendation service builds a per-user taste vector, runs approximate nearest-neighbor search over pgvector, and re-ranks candidates by deal quality and freshness.
 
-Ranking uses `sentence-transformers` (`all-MiniLM-L6-v2`) when the optional ML extras are
-installed, and falls back to a deterministic bag-of-words cosine so the service runs
-anywhere. Set `FANOUT_SEARCH=1` to fan out across all stores in parallel for a wider
-comparison set.
+## Design notes
 
-The tiers are decoupled (client ↔ API ↔ agent ↔ ML ↔ data), so each can scale or be
-swapped independently — for example TinyDB → Postgres, or a vector database for
-embeddings — without touching the others.
+- **Content-based similarity over collaborative filtering.** The catalog churns daily, so a brand-new deal has no interaction history exactly when it matters most; embedding every product at ingest sidesteps item cold-start.
+- **Deal quality is a blend, not a raw discount.** Ranking combines semantic similarity with a deal score derived from each item's own trailing price-history median — which defends against fake "was" anchor prices — plus freshness.
+- **Two decoupled planes.** Bursty batch scraping and steady low-latency serving have different scaling profiles, so ingestion and serving scale and fail independently while sharing the database.
+- **Subtract where possible.** At ~1M-SKU scale, embeddings fit comfortably in pgvector, so the design avoids a separate vector database, Kafka, or a search cluster until scale demands them.
 
 ## API Endpoints
 
@@ -164,14 +148,6 @@ make run-frontend
 - `make lint` - Run flake8 linting
 - `make format` - Format code with black
 
-## How to Use
-
-1. Open the mobile app
-2. Paste a URL of a fashion item you like
-3. Wait for the app to analyze the product
-4. Browse through similar items and deals
-5. Save your favorite finds
-
 ## Project Structure
 
 ```
@@ -191,20 +167,6 @@ make run-frontend
 │   └── src/api.js        # Backend API client
 └── .github/workflows/    # CI/CD pipeline
 ```
-
-## Development
-
-- Follow PEP 8 for Python code
-- Use ESLint for JavaScript/React Native code
-- Write tests for new features
-- Keep the codebase clean and documented
-
-## Contributing
-
-1. Fork the project
-2. Create your feature branch
-3. Make your changes
-4. Submit a pull request
 
 ## License
 
