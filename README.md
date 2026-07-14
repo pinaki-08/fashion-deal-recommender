@@ -30,34 +30,34 @@ A smart shopping assistant that helps users find the best deals on fashion items
 - Cross-platform compatibility
 
 ### CI/CD & Deployment
-- GitHub Actions pipeline (`.github/workflows/ci.yml`): lint, test, then
-  build and push the Docker image on merge to `main`.
-- Kubernetes manifests under `k8s/` for deployment to AWS EKS.
+- GitHub Actions pipelines under `.github/workflows/` for linting, testing, and
+  building the Docker image.
+- Kubernetes manifests under `k8s/` for containerized deployment.
 
-## System Design
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph CLIENT["📱 Client Tier"]
+    subgraph CLIENT["Client Tier"]
         U["React Native / Expo App"]
     end
 
-    subgraph EDGE["🌐 Edge"]
+    subgraph EDGE["Edge"]
         LB["Load Balancer / Ingress<br/>(k8s Service)"]
     end
 
-    subgraph APP["⚙️ Application Tier — Flask API (app.py)"]
+    subgraph APP["Application Tier — Flask API (app.py)"]
         API["REST Endpoints<br/>/analyze-product · /semantic-search<br/>/stores · /recent-searches"]
-        AG["🧠 Agent (agent.py)<br/>orchestrate fetch → parse → tag → rank"]
-        REC["🔍 Recommender (recommender.py)<br/>sentence-transformers + BoW fallback"]
-        ST["🏬 Stores Catalog (stores.py)<br/>50+ retailers"]
+        AG["Agent (agent.py)<br/>fetch → parse → tag → rank"]
+        REC["Recommender (recommender.py)<br/>sentence-transformers + BoW fallback"]
+        ST["Stores Catalog (stores.py)<br/>50+ retailers"]
     end
 
-    subgraph DATA["💾 Data Tier"]
+    subgraph DATA["Data Tier"]
         DB[("TinyDB<br/>products.json<br/>search history")]
     end
 
-    subgraph EXT["🔗 External Services"]
+    subgraph EXT["External Services"]
         SAPI["ScraperAPI"]
         WEB["Retailer Sites<br/>Zara · H&M · Amazon …"]
     end
@@ -78,45 +78,21 @@ flowchart LR
     class DB data;
 ```
 
-**Flow:** mobile client → load balancer → Flask API → Agent scrapes the source page through ScraperAPI → expands to a 50+ store candidate set → recommender ranks by semantic similarity → results persisted to TinyDB and returned to the client.
+**Flow:** the mobile client sends a product URL to the Flask API. The **Agent**
+(`agent.py`) orchestrates the pipeline — scrape the source page through **ScraperAPI**,
+build a candidate set from the 50+ store catalog (`stores.py`), and rank alternatives by
+semantic similarity via the **Recommender** (`recommender.py`). Search history is
+persisted to **TinyDB** (`products.json`) and the ranked deals are returned to the client
+as JSON.
 
-### Step-by-step explanation
+Ranking uses `sentence-transformers` (`all-MiniLM-L6-v2`) when the optional ML extras are
+installed, and falls back to a deterministic bag-of-words cosine so the service runs
+anywhere. Set `FANOUT_SEARCH=1` to fan out across all stores in parallel for a wider
+comparison set.
 
-1. **Client request** — The Expo app POSTs a product URL to `/analyze-product`. The mobile client is stateless and only renders results, keeping it portable across iOS/Android.
-2. **Edge routing** — A Kubernetes `Service`/ingress fronts the API so traffic can be load-balanced across multiple Flask replicas, enabling horizontal scaling.
-3. **Orchestration** — The API hands the URL to the **Agent** (`agent.py`), which owns the full pipeline: map URL → store, fetch, parse, tag, and rank. Keeping this in one place isolates business logic from transport.
-4. **Scrape** — The Agent calls **ScraperAPI** (proxy/anti-bot) to fetch the retailer page reliably, then extracts product details with BeautifulSoup. ScraperAPI absorbs rate limits and IP blocking so the app doesn't have to.
-5. **Candidate generation** — The **Stores catalog** (`stores.py`) supplies 50+ retailers. By default candidates come from links on the scraped page; with `FANOUT_SEARCH=1` the Agent fans out across all stores in parallel (`gather_candidates`) to widen the comparison set, then merges results.
-6. **Semantic ranking** — The **Recommender** (`recommender.py`) embeds the source product and candidates with `sentence-transformers`, falling back to a deterministic bag-of-words cosine when ML extras aren't installed — so it runs anywhere.
-7. **Persistence & response** — Search history is written to **TinyDB** (`products.json`) for recent-searches, and the ranked deals are returned to the client as JSON.
-
-**Why this design:** the layers are decoupled (client ↔ API ↔ agent ↔ ML ↔ data), so each can scale or be swapped independently — e.g., TinyDB → Postgres, or a vector DB for embeddings — without touching the others.
-
-### How it works (4 steps)
-
-1. **Request** — the mobile app sends a product URL to the **Flask API**.
-2. **Scrape** — the **Agent** fetches the page (via ScraperAPI) and extracts the
-   product details.
-3. **Rank** — it finds similar items across **50+ stores** and ranks them by
-   **semantic similarity**.
-4. **Respond** — results are saved to the **database** and returned to the app.
-
-### What each part does
-
-| Component | Role | Why it's there |
-|---|---|---|
-| 📱 **Mobile App** | React Native (Expo) frontend | Where the user pastes a product URL and views deals |
-| ⚙️ **Flask API** | REST backend (`app.py`) | Receives requests, talks to the agent, returns JSON |
-| 🧠 **Agent** | Core logic (`agent.py`) | Orchestrates scrape → extract → tag → (optional fan-out) → rank |
-| 🏬 **Stores** | Catalog + search (`stores.py`) | Tags products by domain; can search 50+ stores in parallel |
-| 🌐 **Retailer Sites** | External shops (Zara, H&M, Amazon…) | The live source of product data, fetched via ScraperAPI |
-| 🔍 **Semantic Ranking** | ML matcher (`recommender.py`) | Scores how *similar* each candidate is to the source product |
-| 💾 **Database** | TinyDB | Stores search history so users can revisit past searches |
-
-### One-line summary
-
-> A mobile app that finds similar fashion deals across 50+ stores by **scraping**
-> product pages and ranking alternatives with **semantic similarity**.
+The tiers are decoupled (client ↔ API ↔ agent ↔ ML ↔ data), so each can scale or be
+swapped independently — for example TinyDB → Postgres, or a vector database for
+embeddings — without touching the others.
 
 ## API Endpoints
 
@@ -184,7 +160,9 @@ make run-frontend
 
 - `make help` - Show all available commands
 - `make clean` - Clean up generated files and dependencies
-- `make test` - Run both backend and frontend tests
+- `make test` - Run the backend test suite
+- `make lint` - Run flake8 linting
+- `make format` - Format code with black
 
 ## How to Use
 
@@ -207,7 +185,7 @@ make run-frontend
 ├── requirements-ml.txt   # Optional ML dependencies (sentence-transformers)
 ├── Dockerfile            # Container image
 ├── tests/                # pytest suite (agent, app, recommender, scraper)
-├── k8s/                  # Kubernetes manifests for AWS EKS
+├── k8s/                  # Kubernetes manifests
 ├── frontend/             # React Native (Expo) mobile app
 │   ├── App.js            # Main screen
 │   └── src/api.js        # Backend API client
@@ -230,4 +208,4 @@ make run-frontend
 
 ## License
 
-MIT License - feel free to use and modify the code as you wish
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
